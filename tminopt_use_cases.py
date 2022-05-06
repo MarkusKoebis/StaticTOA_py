@@ -228,12 +228,286 @@ def use_case_optimism_pessimism():
     plt.subplot(3, 1, 3)
     plt.plot(ext_cond_adapt_vals, mu_vals)
     #
-    
+
+
+def use_case_RBA_jumps():
+    '''
+    Figure 7
+    '''    
+    constants = mini.create_constants(flag= 2)
+    wvec = mini.create_weight_vector(y_vec, constants)
+    init_Ns = [0.5, 1.0, 1.0, 5.0]
+    goal_Ns = [1.0, 0.5, 5.0, 1.0]
+    for k, (init_N, goal_N) in enumerate(zip(init_Ns, goal_Ns)):
+        # RBA
+        ext_init = lambda t: init_N
+        m_dictRBA_init = cFBA.create_m_dict(mini, ext_init, constants)
+        outRBA_init, _ = cFBA.RBA_like(m_dictRBA_init, 0.0, del_t_RBA, verbosity_level=0,
+                                       mumin=1.0, mumax=2.0, y_start=None, wvec=wvec)
+        ext_goal = lambda t: goal_N
+        m_dictRBA_goal = cFBA.create_m_dict(mini, ext_goal, constants)
+        outRBA_goal, _ = cFBA.RBA_like(m_dictRBA_goal, 0.0, del_t_RBA, verbosity_level=0,
+                                       mumin=1.0, mumax=2.0, y_start=None, wvec=wvec)
+        # t-min-opt
+        yinit = np.fmax(outRBA_init['y'], 0.0*outRBA_init['y'])# make sure, none are negative
+        ygoal = np.fmax(outRBA_goal['y'], 0.0*outRBA_goal['y'])# make sure, none are negative
+        ext_cond = lambda t: goal_N
+        tast, outtmin, _ = cFBA.opt_jump_from_to(mini, yinit, ygoal, ext_cond, constants, J0=None, Jend=None, wvec=wvec, t0=0.0,
+                                                 est_min=1e-3, est_max=1e3, t_estimates=None, n_steps=100, verbosity_level=0)
+        print(f'{init_N}\t{goal_N}\t{tast}')
+        # deFVA
+        y_min, y_max = cFBA.low_level_deFVA(outtmin, y_vec, verbosity_level=0, varphi=0.0, fva_level=1)
+        #
+        toa_disp.plot_ty_between(outtmin['tgrid'], y_min, y_max, y_vec, col_dict, line_style=':')#, wvec=None, line_style='-'):
+        toa_disp.plot_ty(outtmin['tgrid'], outtmin['y_data'], y_vec, col_dict)
+        plt.title(f'N from {init_N} to {goal_N}')
+        plt.show()
+
+
+def use_case_Pareto():
+    '''
+    Figure 8
+    '''
+    constants = mini.create_constants(flag=2)
+    wvec = mini.create_weight_vector(y_vec, constants)
+    n_givenvals = 26 
+    n_steps_tmin = 100
+    # adapted at start to these conditions -----------------------------------------------------------
+    e0 = 1.0
+    ext_adapt = lambda t: e0
+    m_dict_adapt = cFBA.create_m_dict(mini, ext_adapt, constants)
+    rba_adapt, mu_adapt = cFBA.RBA_like(m_dict_adapt, 0.0, del_t_RBA, verbosity_level=0,
+                                        mumin=1.0, mumax=2.0, y_start=None, wvec=wvec)
+    ygoal_normed = np.fmax(rba_adapt['y'], 0.0*rba_adapt['y'])
+    # given external conditions --------------------------------------------------------------------
+    ext_vals, col_string_vals = np.array([0.2, 1.0, 10.0]), ['green', 'blue', 'black']
+    #
+    all_mu_vals = []
+    all_tast_vals = []
+    #
+    for n, e in enumerate(ext_vals):
+        print(n)
+        ext = lambda t: e
+        m_dict = cFBA.create_m_dict(mini, ext, constants)
+        rba_sol, mu_sol = cFBA.RBA_like(m_dict, 0.0, del_t_RBA, verbosity_level=0,
+                                        mumin=1.0, mumax=2.0, y_start=None, wvec=wvec)
+        yinit = np.fmax(rba_sol['y'], 0.0*rba_sol['y'])
+        tast_vals = np.nan*np.ones(n_givenvals+1)
+        #
+        if e != e0:
+            tast_min, out, _ = cFBA.opt_jump_from_to(mini, yinit, ygoal_normed, ext_adapt, constants,#J0=None, Jend=None,
+                                                     wvec=wvec,# t0=0.0, est_min=1e-3, est_max=1e3, t_estimates=None, n_steps=50, verbosity_level=0)
+                                                     n_steps=n_steps_tmin, verbosity_level=0)
+            y_min, y_max = cFBA.low_level_deFVA(out, y_vec, verbosity_level=0, varphi=0.0, fva_level=1)
+            mu_min = np.inner(wvec.flatten(), out['y_data'][-1,:].flatten())
+        else:
+            tast_min = 0.0
+            mu_min = 1.0
+        print(tast_min, mu_min)
+        mu_vals = np.hstack([[np.exp(i**2) for i in np.linspace(np.sqrt(np.log(mu_min)), np.sqrt(np.log(4.50)), n_givenvals)],[6.0]])
+        tast_vals[0] = tast_min
+        #
+        for k, mu in enumerate(mu_vals[1:]):
+            print('\t', k, '\tmu = ', mu)
+            # fix the end configuration
+            ygoal = mu*ygoal_normed
+            # run tminopt
+            tast, out, _ = cFBA.opt_jump_from_to(mini, yinit, ygoal, ext_adapt, constants,#J0=None, Jend=None, wvec=None, t0=0.0, 
+                                                 #est_min=1e-3, est_max=1e3, # t_estimates=None, n_steps=50, verbosity_level=0)
+                                                 n_steps=n_steps_tmin, verbosity_level=0)
+            tast_vals[k+1] = tast
+        print(tast, mu)
+        #
+        all_mu_vals.append(mu_vals)
+        all_tast_vals.append(tast_vals)
+        #
+    print(40*'+')
+    for mu_vals in all_mu_vals:
+        print(mu_vals)
+    print(40*'+')
+    for tast_vals in all_tast_vals:
+        print(tast_vals)
+    for n, col_string in enumerate(col_string_vals):
+        tast_vals = all_tast_vals[n]
+        mu_vals = all_mu_vals[n]
+        plt.semilogy(tast_vals, mu_vals, marker='.', color=col_string)
+
+
+
+
+
+def use_case_Pareto_alt():
+    '''
+    adaptation of Figure 8: jump to different environments
+    '''    
+    constants = mini.create_constants(flag=2)
+    wvec = mini.create_weight_vector(y_vec, constants)
+    n_givenvals = 35
+    n_steps_tmin = 100
+    # adapted at start to these conditions -----------------------------------------------------------
+    e0 = 1.0
+    ext_adapt = lambda t: e0
+    m_dict_adapt = cFBA.create_m_dict(mini, ext_adapt, constants)
+    rba_adapt, mu_adapt = cFBA.RBA_like(m_dict_adapt, 0.0, del_t_RBA, verbosity_level=0,
+                                        mumin=1.0, mumax=2.0, y_start=None, wvec=wvec)
+    yinit = np.fmax(rba_adapt['y'], 0.0*rba_adapt['y'])
+    # given external conditions --------------------------------------------------------------------
+    ext_vals, col_string_vals = np.array([0.5, 1.0, 2.0]), ['green', 'blue', 'black']
+    #
+    all_mu_vals = []
+    all_tast_vals = []
+    #
+    for n, e in enumerate(ext_vals):
+        print(n)
+        ext = lambda t: e
+        m_dict = cFBA.create_m_dict(mini, ext, constants)
+        rba_sol, mu_sol = cFBA.RBA_like(m_dict, 0.0, del_t_RBA, verbosity_level=0,
+                                        mumin=1.0, mumax=2.0, y_start=None, wvec=wvec)
+        ygoal_normed = np.fmax(rba_sol['y'], 0.0*rba_sol['y'])
+        #
+        tast_vals = np.nan*np.ones(n_givenvals)
+        #
+        if e != e0:
+            tast_min, out, _ = cFBA.opt_jump_from_to(mini, yinit, ygoal_normed, ext, constants,#J0=None, Jend=None,
+                                                     wvec=wvec,# t0=0.0, est_min=1e-3, est_max=1e3, t_estimates=None, n_steps=50, verbosity_level=0)
+                                                     n_steps=n_steps_tmin, verbosity_level=0)
+            mu_min = np.inner(wvec.flatten(), out['y_data'][-1,:].flatten())
+        else:
+            tast_min = 0.0
+            mu_min = 1.0
+            print(tast_min, mu_min)
+        #
+        mu_vals = np.linspace(mu_min, 1.65, n_givenvals)
+        tast_vals[0] = tast_min
+        #
+        for k, mu in enumerate(mu_vals[1:]):
+            print('\t', k)
+            # fix the end configuration
+            ygoal = mu*ygoal_normed
+            # run tminopt
+            tast, out, _ = cFBA.opt_jump_from_to(mini, yinit, ygoal, ext, constants,#J0=None, Jend=None, wvec=None, t0=0.0, 
+                                                 #est_min=1e-3, est_max=1e3, # t_estimates=None, n_steps=50, verbosity_level=0)
+                                                 n_steps=n_steps_tmin, verbosity_level=0)
+            tast_vals[k+1] = tast
+        all_mu_vals.append(mu_vals)
+        all_tast_vals.append(tast_vals)
+    print(40*'+')
+    for mu_vals in all_mu_vals:
+        print(mu_vals)
+    print(40*'+')
+    for tast_vals in all_tast_vals:
+        print(tast_vals)
+    for n, col_string in enumerate(col_string_vals):
+        tast_vals = all_tast_vals[n]
+        mu_vals = all_mu_vals[n]
+        plt.semilogy(tast_vals, mu_vals, marker='.', color=col_string)
+        
+
+def use_case_optimism_pessimism_alt():
+    '''
+    cell doubling: the role of optimism/pessimism for storage
+    the cell lives in a surrounding of ext_cond but is adapted to ext_cond_adapt_val
+    This time, the former changes for the plots
+    '''
+    constants = mini.create_constants(flag= 2)
+    wvec = mini.create_weight_vector(y_vec, constants)
+    ext_cond_adapt = lambda t: 1.0 # always adapted to this external condition
+    #
+    n_int = 45 #45
+    M_vals = np.zeros((n_int, 9))
+    tast_vals = np.zeros((n_int, 1))
+    mu_vals = np.zeros((n_int, 4))
+    lambda_vals = np.zeros((n_int, 4))
+    ext_cond_vals = np.linspace(0.2, 2.0, n_int)
+    #
+    m_dictRBA_adapt = cFBA.create_m_dict(mini, ext_cond_adapt, constants)
+    outRBA_adapt, muRBA_adapt = cFBA.RBA_like(m_dictRBA_adapt, 0.0, del_t_RBA, verbosity_level=0,
+                                              mumin=1.0, mumax=2.0, y_start=None, wvec=wvec)
+    yinit = np.fmax(outRBA_adapt['y'], 0.0*outRBA_adapt['y'])
+    ygoal = 2.0*yinit
+    #
+    for k, ext_cond_val in enumerate(ext_cond_vals):
+        print(f'k = {k+1} of {n_int}')
+        ext_cond = lambda t: ext_cond_val
+        m_dictRBA_env = cFBA.create_m_dict(mini, ext_cond, constants)
+        out_RBA_env, muRBA_env = cFBA.RBA_like(m_dictRBA_env, 0.0, del_t_RBA, verbosity_level=0,
+                                               mumin=1.0, mumax=2.0, y_start=None, wvec=wvec)
+        # (ii) compute tminopt
+        #yinit = np.fmax(out_RBA_env['y'], 0.0*out_RBA_env['y'])# make sure, none are negative
+        tast, out, _ = cFBA.opt_jump_from_to(mini, yinit, ygoal, ext_cond, constants, # J0=None, Jend=None, wvec=None, t0=0.0,
+                                   #est_min=1e-3, est_max=1e3, t_estimates=None,
+                                   n_steps=100, verbosity_level=0)
+        # (iii) compute deFVA
+        #y_min, y_max, egal = cFBA.relative_tmin_deFVA(mini, yinit, ygoal, ext_cond, tast,
+        #                                                      constants, wvec, verbosity_level=0,
+        #                                                      t_extend_trials=(1.0e-7, 1.0e-5))
+        # (iv) compute iterative RBA
+        _, muRBA_it = cFBA.RBA_like(m_dictRBA_env, 0.0, del_t_RBA, verbosity_level=0,
+                                    mumin=1.0, mumax=2.0, y_start=yinit, wvec=None)
+        # (v) compute averages (plain so far)
+        min_M =   np.min( out['y_data'][:, y_vec.index('M')] )
+        mean_M = np.mean( out['y_data'][:, y_vec.index('M')] )
+        max_M =   np.max( out['y_data'][:, y_vec.index('M')] )
+        #min_M_min =   np.min( y_min[:, y_vec.index('M')] )
+        #mean_M_min = np.mean( y_min[:, y_vec.index('M')] )
+        #max_M_min =   np.max( y_min[:, y_vec.index('M')] )
+        #min_M_max =   np.min( y_max[:, y_vec.index('M')] )
+        #mean_M_max = np.mean( y_max[:, y_vec.index('M')] )
+        #max_M_max =   np.max( y_max[:, y_vec.index('M')] )
+        #
+        M_vals[k, 0] = min_M
+        M_vals[k, 1] = mean_M
+        M_vals[k, 2] = max_M
+        #M_vals[k, 3] = min_M_min
+        #M_vals[k, 4] = mean_M_min
+        #M_vals[k, 5] = max_M_min
+        #M_vals[k, 6] = min_M_max
+        #M_vals[k, 7] = mean_M_max
+        #M_vals[k, 8] = max_M_max
+        #
+        tast_vals[k, 0] = tast
+        mu_vals[k, 0] = muRBA_env
+        mu_vals[k, 1] = muRBA_adapt
+        mu_vals[k, 2] = muRBA_it
+        mu_tmin = np.exp(np.log(2.0)*del_t_RBA/tast)
+        mu_vals[k, 3] = mu_tmin
+        #
+        lambda_vals[k, 0] = np.log(muRBA_env)/del_t_RBA
+        lambda_vals[k, 1] = np.log(muRBA_adapt)/del_t_RBA
+        lambda_vals[k, 2] = np.log(muRBA_it)/del_t_RBA
+        lambda_vals[k, 3] = np.log(mu_tmin)/del_t_RBA
+        #
+        # (v) plot/export
+        #toa_disp.plot_ty_between(out['tgrid'], y_min, y_max, y_vec, col_dict)#, wvec=None, line_style='-'):
+        #toa_disp.plot_ty(out['tgrid'], out['y_data'], y_vec, col_dict)
+        #plt.title(f'N_adapt = {ext_cond_adapt_val}')
+        #plt.show()
+    #plt.subplot(3, 1, 1)
+    #plt.plot(ext_cond_adapt_vals, M_vals[:,[4,7]])
+    #plt.subplot(3, 1, 2)
+    #plt.plot(ext_cond_vals, tast_vals)
+    #plt.subplot(3, 1, 3)
+    #plt.plot(ext_cond_vals, mu_vals)
+    plt.subplot(1,2,1)
+    plt.plot(ext_cond_vals, lambda_vals)
+    plt.legend(['env.', 'adapt', 'it. RBA', 'TOA'])
+    #
+    print(lambda_vals)
+    print('---------')
+    print(lambda_vals[:,[2,3]]/lambda_vals[:,[0]])
+    #
+    plt.subplot(1,2,2)
+    plt.plot(ext_cond_vals, lambda_vals[:,[2,3]]/lambda_vals[:,[0]])
+    plt.legend(['it. RBA', 'TOA'])
+    #
+
+
 #use_case_RBA_curves()
 #use_case_cell_doubling()
 #use_case_different_cell_doublings()
-use_case_optimism_pessimism()
+#use_case_optimism_pessimism()
+#use_case_RBA_jumps()
+#use_case_Pareto()
 
-
-
+use_case_optimism_pessimism_alt()
 
